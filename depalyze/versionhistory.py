@@ -31,10 +31,12 @@ class VersionHistories():
         self.end_of_time = datetime.datetime.now().replace(tzinfo=pytz.UTC)
 
     def serialize(self):
-        return {"dc": self.dc, "dv": self.dv, "eot": self.end_of_time}
+        return {"dc": self.dc, "dv": self.dv, "eot": self.end_of_time, "deps": self.depscache, "rdeps": self.rdepscache}
 
     def deserialize(self, dct):
         self.preload(dct["dc"], dct["dv"], dct["eot"]) 
+        self.depscache = dct["deps"]
+        self.rdepscache = dct["rdeps"]
 
     def set_end_of_time(self, end_of_time):
         self.end_of_time = end_of_time
@@ -48,6 +50,18 @@ class VersionHistories():
             for v in self.dc[p]:
                 if self.dc[p][v].tzinfo is None:
                     self.dc[p][v] = self.dc[p][v].replace(tzinfo=pytz.UTC)
+
+    def validate(self):
+        for p in self.dc:
+            assert p in self.dv, "Not all packages in dv: " + p
+        for p in self.dv:
+            assert p in self.dc, "Not all packages in dc: " + p
+        for p in self.dv:
+            for v in self.dv[p]:
+                for d in self.dv[p][v]:
+                    for (tag,constraint) in self.dv[p][v][d]:
+                        assert isinstance(tag, basestring) and isinstance(constraint, basestring), \
+                             "Bad contents of dv at " + str(p,v,d) + ":" + str(self.dv[p][v][d])
 
     def preload(self, dc, dv, end_of_time):
         self.dc = dc
