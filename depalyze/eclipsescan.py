@@ -30,12 +30,14 @@ def scan_eclipse_xml(fname, sample = False):
                        ver_changes[focal][focal_ver] = focal_ver_date
                        if focal_ver not in ver_deps[focal]: ver_deps[focal][focal_ver] = dict()
                        for ch in xmldoc.bundle.iterchildren():
+                           if ch.text not in ver_deps[focal][focal_ver]:
+                               ver_deps[focal][focal_ver][ch.text] = []
                            if "v" in ch.attrib:
-                               ver_deps[focal][focal_ver][ch.text] = (ch.tag, ch.attrib["v"])
+                               ver_deps[focal][focal_ver][ch.text].append((ch.tag, ch.attrib["v"]))
                            elif "bundle-version" in ch.attrib:
-                               ver_deps[focal][focal_ver][ch.text] = (ch.tag, ch.attrib["bundle-version"]) 
+                               ver_deps[focal][focal_ver][ch.text].append((ch.tag, ch.attrib["bundle-version"]) )
                            else:
-                               ver_deps[focal][focal_ver][ch.text] = (ch.tag, "")
+                               ver_deps[focal][focal_ver][ch.text].append((ch.tag, ""))
                 except Exception, e:
                    print line, e
     vh = versionhistory.VersionHistories()
