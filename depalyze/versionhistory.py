@@ -11,6 +11,10 @@ import datetime
 from timeline.timeline import Timeline
 import dateutil
 from pointspans import PointSpans
+from matplotlib import dates
+from pylab import *
+
+
 
 class VersionHistories():
     """Represent the version and dependency history of an entire software ecosystem
@@ -27,7 +31,7 @@ class VersionHistories():
         self.dv = {}
         self.depscache = {}
         self.rdepscache = {}
-        self.logwith = lambda k: print(k)
+        self.logwith = lambda *k: print(*k)
         self.end_of_time = datetime.datetime.now().replace(tzinfo=pytz.UTC)
 
     def serialize(self):
@@ -104,8 +108,13 @@ class VersionHistories():
         self.logwith("   ...Done with reverse dependencies")
 
     def versions(self, package):
-        """List all known versions of this package"""
-        return self.dc[package].keys()
+        """List all known versions of this package, in chrono order"""
+        return sorted(self.dc[package].keys(), key=lambda v: self.dc[package][v])
+
+    def reverse_dependencies(self, package):
+        if len(self.rdepscache) == 0:
+            self.buildReverseDependencies()
+        return self.rdepscache[package]
 
     def dependencies(self, package):
         """List all packages that have ever been dependencies of a package"""
@@ -187,6 +196,33 @@ class VersionHistories():
             if colname == "dep": tleft = text
             yield format % (tempus,tleft,tmid,tright)
 
+    def present_dependencies(self, p):
+        return [dep for dep in self.dependencies(p) if dep in self.dc]
+
+    def interesting(self):
+        for p in self.dc:
+            pd = self.present_dependencies(p)
+            rd = self.reverse_dependencies(p)
+            if (len(pd) > 0 and len(rd) > 0):
+                yield (p, pd, rd)
+
+    def dep_versions(self, p, dep):
+        """List of circumstances (version) when package changed what version of dep it pointed to"""
+        lastversion = ""
+        result = {}
+        for v in self.dv[p]:
+            if dep in self.dv[p][v] and len(self.dv[p][v][dep]) > 0:
+                thisversion = self.dv[p][v][dep][0][1]
+                if thisversion != lastversion:
+                    result[v] = thisversion
+                lastversion = thisversion
+            else:
+                thisversion = ""
+                if thisversion != lastversion:
+                    result[v] = thisversion
+                lastversion = thisversion
+        return result
+
     def todo(self):
         """Functions still to be ported from previous implementation
 
@@ -200,57 +236,72 @@ class VersionHistories():
                     f.write("\n".join(timel))
             except Exception, e:
                 print e
+        """
 
-    def analyzePackage(package_key, dc, dv):
-    
-        dcp = dc[p]
-        dvp = dv[p]
-        print package_key
-    
-        vers_names = dcp.ketys()
+    def author(self, p): return "author of " + p
+
+    def graph_package_deps(self, p):
     
         tl = Timeline()
         
-    
+        def epoch(t): return t.toordinal() #float(t.strftime("%s"))
+       
+        def hashColor(p): return "b"
+
+        vers_names = self.versions(p)
+
         # extend each version until the end of hte subsequent version
-        for v,w in zip(vers_names, vers_names[1:] + [{"published": today}]):     # Lost author for author color
-            tl.span(package_key, d2epoch(dcp[v]), d2epoch(dcp[w]), package_key + ":" + v, v, hashColor(p), None)
+        for v,w in zip(vers_names[:-1], vers_names[1:]):     # Lost author for author color
+            tl.span(p, epoch(self.dc[p][v]), epoch(self.dc[p][w]), p + ":" + v, v, hashColor(p), None)
+        vlast = vers_names[-1]
+        tl.span(p, epoch(self.dc[p][vlast]), epoch(self.end_of_time), p + ":" + vlast, vlast, hashColor(p), None)
     
-        for dep in njh.dependencies():
-            for (ref,st,en) in njh.dep_version_spans(dep, today):
-                tl.span(dep, d2epoch(st), d2epoch(en), dep + "::" + ref, ref, "w", "bottom")
+        for dep in self.dependencies(p):
+            for (ref,st,en) in self.dep_version_spans(p, dep):
+                tl.span(dep, epoch(st), epoch(en), dep + "::" + ref, ref, "w", "bottom")
     
-            dv = njh.dep_versions(dep)
+            depvers = self.dep_versions(p, dep)
             try:
-                njh2 = NodejsHist(npms, dep)
-                vn2 = njh2.versions()
-                for vv,ww in zip(vn2, vn2[1:] + [{"published": today}]):
-                    tl.span(dep, d2epoch(vv["published"]), d2epoch(ww["published"]), 
-                            dep + ":" + vv["key"], vv["key"], hashColor(njh2.author()), "top") 
-            except:
-                pass
+                vn2 = self.versions(dep)
+                for vv,ww in zip(vn2[:-1], vn2[1:]):
+                    self.logwith( "deploop", vv,ww, self.dc[dep].keys())
+                    tl.span(dep, epoch(self.dc[dep][vv]), epoch(self.dc[dep][ww]),
+                            dep + ":" + vv, vv, hashColor(self.author(dep)), "top") 
+                vvlast = vn2[-1]
+                tl.span(dep, epoch(vvlast), epoch(self.end_of_time),
+                       dep + ":" + vvlast, vvlast, hashColor(self.author(dep)), "top") 
+            except Exception, e:
+                self.logwith("Exception processing dependency", dep, e)
             for vn in vers_names:
-                if vn["key"] in dv:
-                    dep_ver = extractVersionLimiter(dv[vn["key"]])
-                    print dep_ver
+                if vn in depvers:
+                    dep_ver = self.extractVersionLimiter(depvers[vn])
+                    self.logwith( dep_ver)
                     destrec = tl.findByKey(dep + ":" + dep_ver)
-                    srcrec = tl.findByKey(package_key + ":" + vn["key"])
+                    srcrec = tl.findByKey(p + ":" + vn)
                     if len(destrec) > 0 and len(srcrec) > 0:
                         tl.connect(destrec[0], srcrec[0])
-                        print "version", vn["key"], "of", package_key, "did link to dependency", dep, "version", dep_ver
+                        self.logwith( "version", vn, "of", p, "did link to dependency", dep, "version", dep_ver)
                     else:
-                        print "version", vn["key"], "of", package_key, "***can't*** find dependency", \
-                               dep, "version", dep_ver, "lendestrec=", len(destrec), "lensrcrec=", len(srcrec)
+                        self.logwith( "version", vn, "of", p, "***can't*** find dependency", \
+                               dep, "version", dep_ver, "lendestrec=", len(destrec), "lensrcrec=", len(srcrec))
                 else:
-                    print "version", vn["key"], "of", package_key, "did not update dependency on", dep
+                    self.logwith(vn,"is not in",list(depvers))
+                    self.logwith( "version", vn, "of", p, "did not update dependency on", dep)
     
 
         fig, ax = plt.subplots(figsize=(100,max(7, 3*len(tl.categories()))))
-        tl.draw_time_axis(ax, limit_view_category=package_key)
+        tl.draw_time_axis(ax, limit_view_category=p)
         tl.draw_bars(ax)
         tl.draw_connections(ax)
-        savefig("plots/" + package_key + ".png")
-        """
+        savefig("plots/" + p + ".png")
+
+    vlimit = re.compile("\d[\.[a-z_A-Z0-9-]]+")
+    def extractVersionLimiter(self, limit):
+        ans = VersionHistories.vlimit.search(limit)
+        if ans is None:
+            return ""
+        else:
+            return "/" + str(ans.group(0))
 
 
 
