@@ -12,13 +12,30 @@ from timeline.timeline import Timeline
 import dateutil
 from pointspans import PointSpans
 from matplotlib import dates
+from matplotlib import pyplot
+import matplotlib
 from pylab import *
 
 
+def hashColor(key, selected = False):
+    """Return a color unique for this key, brigher if selected.
+
+    Of course the color can't really be unique because there are more keys
+    in the world than colors; but the algorithm tries to make similar strings
+    come out different colors so they can be distinguished in a chart or graph"""
+
+    def tw(t): return t ^ (t << (t%5)) ^ (t << (6+(t%7))) ^ (t << (13+(t%11)))
+    theHash = tw(hash(key) % 5003)
+    ifsel = 0x00 if selected else 0x80
+    (r,g,b) = (ifsel |  (theHash & 0x7f),
+               ifsel | ((theHash>>8) & 0x7F),
+               ifsel | ((theHash>>16) & 0x7F))
+    return "#{0:02x}{1:02x}{2:02x}".format(r,g,b)
 
 class VersionHistories():
     """Represent the version and dependency history of an entire software ecosystem
 
+     self.da = name -> author   (or some other indicator of "togetherness" of a group of packages)
      self.dc = name -> version -> date,
      self.dv = name -> version -> import name-> [(type, versionrefstring)]
 
@@ -27,6 +44,7 @@ class VersionHistories():
     """
 
     def __init__(self):
+        self.da = {}
         self.dc = {}
         self.dv = {}
         self.depscache = {}
@@ -35,10 +53,15 @@ class VersionHistories():
         self.end_of_time = datetime.datetime.now().replace(tzinfo=pytz.UTC)
 
     def serialize(self):
-        return {"dc": self.dc, "dv": self.dv, "eot": self.end_of_time, "deps": self.depscache, "rdeps": self.rdepscache}
+        return {"da": self.da, 
+                "dc": self.dc, 
+                "dv": self.dv, 
+                "eot": self.end_of_time, 
+                "deps": self.depscache, 
+                "rdeps": self.rdepscache}
 
     def deserialize(self, dct):
-        self.preload(dct["dc"], dct["dv"], dct["eot"]) 
+        self.preload(dct["da"], dct["dc"], dct["dv"], dct["eot"]) 
         self.depscache = dct["deps"]
         self.rdepscache = dct["rdeps"]
 
@@ -61,13 +84,17 @@ class VersionHistories():
         for p in self.dv:
             assert p in self.dc, "Not all packages in dc: " + p
         for p in self.dv:
+            assert isinstance(p, basestring), "weird package " + str(p)
             for v in self.dv[p]:
+                assert isinstance(v, basestring), "weird version " + p + " v" + str(v)
                 for d in self.dv[p][v]:
+                    assert isinstance(d, basestring), "weird dependency " + p + " v" + v + " d" + str(d)
                     for (tag,constraint) in self.dv[p][v][d]:
                         assert isinstance(tag, basestring) and isinstance(constraint, basestring), \
-                             "Bad contents of dv at " + str(p,v,d) + ":" + str(self.dv[p][v][d])
+                             "Bad contents of dv at " + str((p,v,d)) + ":" + str(self.dv[p][v][d])
 
-    def preload(self, dc, dv, end_of_time):
+    def preload(self, da, dc, dv, end_of_time):
+        self.da = da
         self.dc = dc
         self.dv = dv
         self.depscache = {}
@@ -126,7 +153,7 @@ class VersionHistories():
             self.depscache[package] = depset 
         return self.depscache[package]
 
-    def showTimeline(self, package, abortIfBoring = False):
+    def showTimeline(self, package, abortIfBoring = False, colwidth = 20):
         """Textual timeline visualization of versions and dependencies of a package
 
         Shows version changes to a package, version changes to its dependencies
@@ -182,11 +209,15 @@ class VersionHistories():
         history = sorted(history, key=lambda (k,c,t): k)
         lasttime = ""
        
-        format = "%25s   %20s   %20s   %20s"
+        format = "%25s   %{}s   %{}s   %{}s".format(colwidth, colwidth, colwidth)
         yield format % ("Time", "Dependency changes", package, "Downstream dependencies")
         for (tstamp,colname,text) in history:
             (tempus, tleft, tmid, tright) = ("", "","","")
-            tempus = tstamp.strftime("%Y-%m-%d")
+            try:
+                tempus = tstamp.strftime("%Y-%m-%d")
+            except Exception, e:
+                self.logwith("Invalid date", str(tstamp), e)
+                tempus = "(bad date)"
             if (tempus == lasttime):
                 tempus = ""
             else:
@@ -238,27 +269,32 @@ class VersionHistories():
                 print e
         """
 
-    def author(self, p): return "author of " + p
+    def author(self, p): return self.da.get(p,"")
 
-    def graph_package_deps(self, p):
+    def graph_package_deps(self, p, pngname):
     
         tl = Timeline()
         
         def epoch(t): return t.toordinal() #float(t.strftime("%s"))
        
-        def hashColor(p): return "b"
+        def authColor(p): return hashColor(self.author(p))
+
+        #depbar = "LightSkyBlue"
+        #focalbar = "Yellow"
+        reflbar = "PaleGoldenrod"
+        
 
         vers_names = self.versions(p)
 
         # extend each version until the end of hte subsequent version
         for v,w in zip(vers_names[:-1], vers_names[1:]):     # Lost author for author color
-            tl.span(p, epoch(self.dc[p][v]), epoch(self.dc[p][w]), p + ":" + v, v, hashColor(p), None)
+            tl.span(p, epoch(self.dc[p][v]), epoch(self.dc[p][w]), p + ":" + v, v, authColor(p), None)
         vlast = vers_names[-1]
-        tl.span(p, epoch(self.dc[p][vlast]), epoch(self.end_of_time), p + ":" + vlast, vlast, hashColor(p), None)
+        tl.span(p, epoch(self.dc[p][vlast]), epoch(self.end_of_time), p + ":" + vlast, vlast, authColor(p), None)
     
         for dep in self.dependencies(p):
             for (ref,st,en) in self.dep_version_spans(p, dep):
-                tl.span(dep, epoch(st), epoch(en), dep + "::" + ref, ref, "w", "bottom")
+                tl.span(dep, epoch(st), epoch(en), dep + "::" + ref, ref, reflbar, "bottom")
     
             depvers = self.dep_versions(p, dep)
             try:
@@ -266,10 +302,10 @@ class VersionHistories():
                 for vv,ww in zip(vn2[:-1], vn2[1:]):
                     self.logwith( "deploop", vv,ww, self.dc[dep].keys())
                     tl.span(dep, epoch(self.dc[dep][vv]), epoch(self.dc[dep][ww]),
-                            dep + ":" + vv, vv, hashColor(self.author(dep)), "top") 
+                            dep + ":" + vv, vv, authColor(dep), "top") 
                 vvlast = vn2[-1]
-                tl.span(dep, epoch(vvlast), epoch(self.end_of_time),
-                       dep + ":" + vvlast, vvlast, hashColor(self.author(dep)), "top") 
+                tl.span(dep, epoch(self.dc[dep][vvlast]), epoch(self.end_of_time),
+                       dep + ":" + vvlast, vvlast, authColor(dep), "top") 
             except Exception, e:
                 self.logwith("Exception processing dependency", dep, e)
             for vn in vers_names:
@@ -288,12 +324,17 @@ class VersionHistories():
                     self.logwith(vn,"is not in",list(depvers))
                     self.logwith( "version", vn, "of", p, "did not update dependency on", dep)
     
-
-        fig, ax = plt.subplots(figsize=(100,max(7, 3*len(tl.categories()))))
-        tl.draw_time_axis(ax, limit_view_category=p)
-        tl.draw_bars(ax)
-        tl.draw_connections(ax)
-        savefig("plots/" + p + ".png")
+        try:
+            fig, ax = plt.subplots(figsize=(100,max(7, 3*len(tl.categories()))))
+            tl.draw_time_axis(ax, limit_view_category=p)
+            tl.draw_bars(ax)
+            tl.draw_connections(ax)
+            savefig(pngname)
+        except Exception, e:
+            import traceback
+            traceback.print_exc()
+            print("Error drawing figure for ", p, ":", e)
+        plt.close("all")
 
     vlimit = re.compile("\d[\.[a-z_A-Z0-9-]]+")
     def extractVersionLimiter(self, limit):
@@ -303,5 +344,15 @@ class VersionHistories():
         else:
             return "/" + str(ans.group(0))
 
+    def investigate(self, plots, colwidth=20):
+        for (p, pd, rd) in self.interesting():
+            print(p, self.author(p))
+            auth = self.author(p)
+            rds = [r for r in rd if self.author(r) != auth]
+            pds = [d for d in pd if self.author(d) != auth]
+            if len(rds) > 0 and len(pds) > 0:
+                with open(plots + "/" + p + ".timeline.txt", "w") as f:
+                    f.write("\n".join(list(self.showTimeline(p, colwidth=colwidth))).encode('ascii','ignore'))
+                self.graph_package_deps(p, plots + "/" + p + ".png")
 
 

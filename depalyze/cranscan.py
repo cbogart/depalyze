@@ -14,7 +14,7 @@ def scan_R_descriptions(descriptionDir):
             if f == "DESCRIPTION":
                 with open( os.path.join(root,f), "r") as f:
                     depstruct = depstruct + parseDCF(f.read())
-    (dc, dv) = DCFparse2DependencyLists(depstruct)
+    (da, dc, dv) = DCFparse2DependencyLists(depstruct)
     vh = versionhistory.VersionHistories()
-    vh.preload(dc, dv, datetime.datetime.now().replace(tzinfo=pytz.UTC))
+    vh.preload(da, dc, dv, datetime.datetime.now().replace(tzinfo=pytz.UTC))
     return vh

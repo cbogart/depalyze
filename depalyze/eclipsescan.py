@@ -10,6 +10,7 @@ def scan_eclipse_xml(fname, sample = False):
     kidtypes = ["req", "extensionPoint", "extension"]
     ver_changes = dict()
     ver_deps = dict()
+    ver_auth = dict()
     rowcount = 0
     with open(fname,"r") as f:
         for line in f.readlines():
@@ -20,16 +21,20 @@ def scan_eclipse_xml(fname, sample = False):
                 try:
                    xmldoc = objectify.fromstring(line.strip())
                    focal = xmldoc.bundle.attrib["name"]
+                   if len(focal) == 0: raise ValueError("Empty bundle name; skipping")
                    focal_ver = xmldoc.bundle.attrib["version"]
                    focal_ver_date = datetime.datetime.fromtimestamp(float(xmldoc.attrib["date"]))
                    if focal not in ver_changes:
                        ver_changes[focal] = dict()
+                       ver_auth[focal] = ".".join(focal.split(".")[:3])
                    if focal not in ver_deps:
                        ver_deps[focal] = dict()
                    if focal_ver not in ver_changes[focal] or ver_changes[focal][focal_ver] < focal_ver_date:
                        ver_changes[focal][focal_ver] = focal_ver_date
                        if focal_ver not in ver_deps[focal]: ver_deps[focal][focal_ver] = dict()
                        for ch in xmldoc.bundle.iterchildren():
+                           if ch.text is None or len(ch.text) == 0:
+                               continue
                            if ch.text not in ver_deps[focal][focal_ver]:
                                ver_deps[focal][focal_ver][ch.text] = []
                            if "v" in ch.attrib:
@@ -41,7 +46,7 @@ def scan_eclipse_xml(fname, sample = False):
                 except Exception, e:
                    print line, e
     vh = versionhistory.VersionHistories()
-    vh.preload(ver_changes, ver_deps, datetime.datetime.now().replace(tzinfo=pytz.UTC))
+    vh.preload(ver_auth, ver_changes, ver_deps, datetime.datetime.now().replace(tzinfo=pytz.UTC))
     return vh
 
 
