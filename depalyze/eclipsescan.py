@@ -1,4 +1,5 @@
 import os
+import re
 import datetime
 import pytz
 import datetime
@@ -6,21 +7,41 @@ import versionhistory
 from collections import defaultdict
 from lxml import objectify
 
+repo_comment = re.compile("<!-- ## (.*?)/(.*?) ## -->")
+
 def scan_eclipse_xml(fname, sample = False):
     kidtypes = ["req", "extensionPoint", "extension"]
     ver_changes = dict()
     ver_deps = dict()
     ver_auth = dict()
+    bundle2project = defaultdict(set)
+    bundle2repo = defaultdict(set)
+    bundle2projrepo = defaultdict(set)
     rowcount = 0
+    project = ""
+    repo = ""
+    projrepo = "/"
     with open(fname,"r") as f:
         for line in f.readlines():
             if len(line) > 2:
                 rowcount = rowcount + 1
                 if sample and rowcount > 20:
                     break
+                if "##" in line:
+                   projinfo = repo_comment.match(line)
+                   if projinfo:
+                      project = projinfo.group(1)
+                      repo = projinfo.group(2)
+                      projrepo = project + "/" + repo
+                      print "FOUND: ", projrepo
+                      continue
                 try:
                    xmldoc = objectify.fromstring(line.strip())
                    focal = xmldoc.bundle.attrib["name"]
+                   if projrepo != "":
+                       bundle2project[focal].add(project)
+                       bundle2repo[focal].add(repo)
+                       bundle2projrepo[focal].add(projrepo)
                    if len(focal) == 0: raise ValueError("Empty bundle name; skipping")
                    focal_ver = xmldoc.bundle.attrib["version"]
                    focal_ver_date = datetime.datetime.fromtimestamp(float(xmldoc.attrib["date"]))
@@ -47,6 +68,10 @@ def scan_eclipse_xml(fname, sample = False):
                    print line, e
     vh = versionhistory.VersionHistories()
     vh.preload(ver_auth, ver_changes, ver_deps, datetime.datetime.now().replace(tzinfo=pytz.UTC))
+    
+    vh.set_aux("bundle2project", { bundle: list(bundle2project[bundle]) for bundle in bundle2project} )
+    vh.set_aux("bundle2repo", { bundle: list(bundle2repo[bundle]) for bundle in bundle2repo} )
+    vh.set_aux("bundle2projrepo", { bundle: list(bundle2projrepo[bundle]) for bundle in bundle2projrepo} )
     return vh
 
 

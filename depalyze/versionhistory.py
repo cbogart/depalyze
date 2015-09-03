@@ -17,6 +17,9 @@ import matplotlib
 from pylab import *
 
 
+class NoVersionsException(Exception):
+    pass
+
 def hashColor(key, selected = False):
     """Return a color unique for this key, brigher if selected.
 
@@ -47,6 +50,7 @@ class VersionHistories():
         self.da = {}
         self.dc = {}
         self.dv = {}
+        self.auxdata = {}
         self.depscache = {}
         self.rdepscache = {}
         self.logwith = lambda *k: print(*k)
@@ -56,6 +60,7 @@ class VersionHistories():
         return {"da": self.da, 
                 "dc": self.dc, 
                 "dv": self.dv, 
+                "aux": self.auxdata, 
                 "eot": self.end_of_time, 
                 "deps": self.depscache, 
                 "rdeps": self.rdepscache}
@@ -64,6 +69,14 @@ class VersionHistories():
         self.preload(dct["da"], dct["dc"], dct["dv"], dct["eot"]) 
         self.depscache = dct["deps"]
         self.rdepscache = dct["rdeps"]
+        self.auxdata = dct["aux"] if "aux" in dct else {}
+        self.logwith("Loaded ", len(list(self.packages())), "packages")
+
+    def get_aux(self, key):
+        return self.auxdata[key]
+
+    def set_aux(self, key, data):
+        self.auxdata[key] = data
 
     def set_end_of_time(self, end_of_time):
         self.end_of_time = end_of_time
@@ -127,7 +140,7 @@ class VersionHistories():
         pcount = 0
         for p in self.dc.keys():
             pcount = pcount + 1
-            if (pcount % 200 == 0):
+            if (pcount % 1000 == 0):
                 self.logwith("   package #"+ str(pcount)+ ":" + str(p))
             for d in self.dependencies(p):
                 self.rdepscache[d].add(p)
@@ -138,10 +151,15 @@ class VersionHistories():
         """List all known versions of this package, in chrono order"""
         return sorted(self.dc[package].keys(), key=lambda v: self.dc[package][v])
 
+    def date_of_version(self, package, version): return self.dc[package][version]
+
     def reverse_dependencies(self, package):
         if len(self.rdepscache) == 0:
             self.buildReverseDependencies()
         return self.rdepscache[package]
+
+    def present_dependencies(self, package):
+        return [d for d in self.dv[package][self.latest_version(package)] if d in self.dc]
 
     def dependencies(self, package):
         """List all packages that have ever been dependencies of a package"""
@@ -153,7 +171,7 @@ class VersionHistories():
             self.depscache[package] = depset 
         return self.depscache[package]
 
-    def showTimeline(self, package, abortIfBoring = False, colwidth = 20):
+    def showTimeline(self, package, abortIfBoring = False, colwidth = 20, file=None):
         """Textual timeline visualization of versions and dependencies of a package
 
         Shows version changes to a package, version changes to its dependencies
@@ -210,7 +228,7 @@ class VersionHistories():
         lasttime = ""
        
         format = "%25s   %{}s   %{}s   %{}s".format(colwidth, colwidth, colwidth)
-        yield format % ("Time", "Dependency changes", package, "Downstream dependencies")
+        op = [format % ("Time", "Dependency changes", package, "Downstream dependencies")]
         for (tstamp,colname,text) in history:
             (tempus, tleft, tmid, tright) = ("", "","","")
             try:
@@ -225,23 +243,143 @@ class VersionHistories():
             if colname == "revdep": tright = text
             if colname == "focal": tmid = text
             if colname == "dep": tleft = text
-            yield format % (tempus,tleft,tmid,tright)
+            op.append(format % (tempus,tleft,tmid,tright))
+        if file == None:
+            return op
+        else:
+            with open(file, "w") as f:
+                f.write("\n".join(op).encode('ascii','ignore'))
 
-    def present_dependencies(self, p):
-        return [dep for dep in self.dependencies(p) if dep in self.dc]
-
-    def interesting(self):
+    def packages(self):
         for p in self.dc:
-            pd = self.present_dependencies(p)
-            rd = self.reverse_dependencies(p)
-            if (len(pd) > 0 and len(rd) > 0):
-                yield (p, pd, rd)
+            yield p
+
+    def interesting_packages(self):
+        for p in self.packages():
+            try:
+                i = self.interesting(p)
+                if i is not None:
+                    yield i
+            except Exception, e:
+                self.logwith("Error checking interestingness of ", p, ":", e)
+
+    def recently_active(self, p, recent_date = None, activity_level = 2):
+        if recent_date is None:
+            recent_date = self.end_of_time.replace(year = self.end_of_time.year - 1)
+        recent_changes = [v for v in self.versions(p) if self.dc[p][v] > recent_date]
+        return len(recent_changes) >= activity_level
+            
+    def latest_version(self, p): 
+        try:
+            return self.versions(p)[-1]
+        except:
+            raise NoVersionsException(p)
+
+    def downstreamer(self, p, explain=False):
+        """Criteria for determining that a package might pose interesting challenges
+        for its author(s) in keeping up with dependencies"""
+
+        if explain:
+            self.logwith("Interestingness test for ", p)
+
+        auth = self.author(p)
+        # Less than three downstreams
+        # at least three *changes* in version to some upstream package
+        # poor string similarity with upstream package's author
+
+        #rd = self.reverse_dependencies(p)
+        #rds = [r for r in rd if self.author(r) != auth]
+        #small_downstream = len(rds) < 4
+        #if (small_downstream and explain):
+        #    self.logwith("\tSmall downstream:", auth, "!=", ",".join([self.author(d) for d in rds]))
+
+        # http://stackoverflow.com/questions/18715688/find-common-substring-between-two-strings
+        def longestSubstringFinder(string1, string2):
+            answer = ""
+            len1, len2 = len(string1), len(string2)
+            for i in range(len1):
+                match = ""
+                for j in range(len2):
+                    if (i + j < len1 and string1[i + j] == string2[j]):
+                        match += string2[j]
+                    else:
+                        if (len(match) > len(answer)): answer = match
+                        match = ""
+            return answer
+
+
+        pd = self.present_dependencies(p)
+        best = ""
+        for upstr in pd:
+            vch = self.dep_versions(p, upstr)
+            if len(vch) > 8:
+                 if explain:
+                     self.logwith("\t" + str(len(vch)) + " changes to upstream " + upstr)
+                 common = longestSubstringFinder(self.author(p), self.author(upstr))
+                 if explain:
+                     self.logwith("\tLongest common author substring is " + common)
+                 if len(common) < 8:
+                     best = upstr
+                     break
+            elif explain:
+                 self.logwith("\t",p,"'s upstream",upstr,"doesn't have many version changes:",vch)
+
+        if best == "" and explain:
+            self.logwith("\t", p, "has no upstreams with lots of version changes")
+        return best != ""
+
+    def interesting(self, p, explain=False):
+        """Criteria for determining that a package might pose interesting challenges
+        for its author(s) in keeping up with dependencies"""
+
+        if explain:
+            self.logwith("Interestingness test for ", p)
+            #import pdb
+            #pdb.set_trace()
+
+        auth = self.author(p)
+
+        pd = self.present_dependencies(p)
+        pds = [d for d in pd if self.author(d) != auth]
+        diverse_upstream = len(pds) > 2
+        if (diverse_upstream and explain):
+            self.logwith("\tDiverse upstream:", auth, "!=", ",".join([self.author(d) for d in pds]))
+
+        busy_upstreams = len([d for d in pds if self.recently_active(d)]) > 1
+        if (busy_upstreams and explain):
+            self.logwith("\tBusy upstream:", ','.join([d for d in pds if self.recently_active(d)]))
+
+        rd = self.reverse_dependencies(p)
+        rds = [r for r in rd if self.author(r) != auth]
+        diverse_downstream = len(rds) > 2
+        if (diverse_downstream and explain):
+            self.logwith("\tDiverse downstream:", auth, "!=", ",".join([self.author(d) for d in rds]))
+
+        recently_updated = (self.end_of_time - self.dc[p][self.latest_version(p)]).total_seconds() < 365*24*24*60;
+        if (recently_updated and explain):
+            self.logwith("\tRecently updated:", self.latest_version(p), " update on ", self.dc[p][self.latest_version(p)])
+
+        if (diverse_upstream and diverse_downstream and recently_updated and busy_upstreams):
+            return (p, pd, rd)
+        else:
+            return None
+
+    def dep_version_changes(self, p):
+        """List of circumstances (version) when package changed what version of dep it pointed to"""
+        lastversion = ""
+        result = {}
+        for v in self.versions(p):
+            thisversion = json.dumps(self.dv[p][v], indent=4)
+            if thisversion != lastversion:
+                result[v] = thisversion
+            lastversion = thisversion
+        return result
 
     def dep_versions(self, p, dep):
         """List of circumstances (version) when package changed what version of dep it pointed to"""
         lastversion = ""
         result = {}
-        for v in self.dv[p]:
+        for v in self.versions(p):
             if dep in self.dv[p][v] and len(self.dv[p][v][dep]) > 0:
                 thisversion = self.dv[p][v][dep][0][1]
                 if thisversion != lastversion:
@@ -329,7 +467,133 @@ class VersionHistories():
             tl.draw_time_axis(ax, limit_view_category=p)
             tl.draw_bars(ax)
             tl.draw_connections(ax)
-            savefig(pngname)
+            t = plt.title("Upstream dependencies: packages that " + p + " depends on\n ", fontsize=90)
+            savefig(pngname, bbox_extra_artists=[t], bbox_inches="tight")
+        except Exception, e:
+            import traceback
+            traceback.print_exc()
+            print("Error drawing figure for ", p, ":", e)
+        plt.close("all")
+
+    def average_update_frequency(self):
+        countable = 0
+        auf = 0.0
+        for p in self.packages():
+            try:
+                uf = self.update_frequency(p)
+                auf = auf + uf
+                if (uf > 1.5):
+                    pass
+                    #print("Package",p,"Has short update frequency of",uf, (1.0/uf))
+                    #pdb.set_trace()
+                countable += 1
+            except:
+                pass
+        print("Of", countable)
+        return auf/countable
+
+    def average_dependency_update_frequency(self):
+        countable = 0
+        auf = 0.0
+        for p in self.packages():
+            try:
+                uf = self.dependency_update_frequency(p)
+                auf = auf + uf
+                if (uf > 1.5):
+                    pass
+                    #print("Package",p,"Has short dependency update frequency of",uf, (1.0/uf))
+                    #pdb.set_trace()
+                countable += 1
+            except:
+                pass
+        print("Of", countable)
+        return auf/countable
+
+    def update_frequency(self, p):
+        """How many times per day was package updated (usually a fraction less than one)"""
+        num_updates = len(self.versions(p))
+        dates = [self.dc[p][ver] for ver in self.dc[p]]
+        span = max(dates)-min(dates)
+        if (len(list(self.reverse_dependencies(p))) == 0):
+            raise Exception("Package without deps")
+        return (num_updates-1)*1.0/span.days    
+
+    def dependency_update_frequency(self, p):
+        num_updates = len(self.dep_version_changes(p))
+        dates = [self.dc[p][ver] for ver in self.dc[p]]
+        span = max(dates)-min(dates)
+        if (len(list(self.reverse_dependencies(p))) == 0):
+            raise Exception("Package without deps")
+        return (num_updates-1)*1.0/span.days    
+
+
+
+    def graph_package_downstreams(self, p, pngname):
+    
+        tl = Timeline()
+        
+        def epoch(t): return t.toordinal() #float(t.strftime("%s"))
+       
+        def authColor(p): return hashColor(self.author(p))
+
+        reflbar = "PaleGoldenrod"
+        
+        vers_names = self.versions(p)
+
+        # Just show the first 20; the image gets too big otherwise
+        for dep in list(self.reverse_dependencies(p))[:20]:
+            for (ref,st,en) in self.dep_version_spans(dep, p):
+                try:
+                    vname = str(ref).strip()
+                    if vname == "": vname = "*"
+                except:
+                    self.logwith("Could not correct version name ", ref)
+                    vname = ref
+                tl.span(dep, epoch(st), epoch(en), dep + "::" + ref, "-->" + vname, reflbar, "bottom", invisibleBar=True)
+    
+            depvers = self.dep_versions(dep, p)
+            try:
+                vn2 = self.versions(dep)
+                for vv,ww in zip(vn2[:-1], vn2[1:]):
+                    self.logwith( "deploop", vv,ww, self.dc[dep].keys())
+                    tl.span(dep, epoch(self.dc[dep][vv]), epoch(self.dc[dep][ww]),
+                            dep + ":" + vv, vv, authColor(dep), "top") 
+                vvlast = vn2[-1]
+                tl.span(dep, epoch(self.dc[dep][vvlast]), epoch(self.end_of_time),
+                       dep + ":" + vvlast, vvlast, authColor(dep), "top") 
+            except Exception, e:
+                self.logwith("Exception processing dependency", dep, e)
+            for vn in vers_names:
+                if vn in depvers:
+                    dep_ver = self.extractVersionLimiter(depvers[vn])
+                    self.logwith( dep_ver)
+                    destrec = tl.findByKey(dep + ":" + dep_ver)
+                    srcrec = tl.findByKey(p + ":" + vn)
+                    if len(destrec) > 0 and len(srcrec) > 0:
+                        tl.connect(destrec[0], srcrec[0])
+                        self.logwith( "version", vn, "of", p, "did link to dependency", dep, "version", dep_ver)
+                    else:
+                        self.logwith( "version", vn, "of", p, "***can't*** find dependency", \
+                               dep, "version", dep_ver, "lendestrec=", len(destrec), "lensrcrec=", len(srcrec))
+                else:
+                    self.logwith(vn,"is not in",list(depvers))
+                    self.logwith( "version", vn, "of", p, "did not update dependency on", dep)
+
+        # extend each version until the end of hte subsequent version
+        for v,w in zip(vers_names[:-1], vers_names[1:]):     # Lost author for author color
+            tl.span(p, epoch(self.dc[p][v]), epoch(self.dc[p][w]), p + ":" + v, v, authColor(p), None)
+
+        vlast = vers_names[-1]
+        tl.span(p, epoch(self.dc[p][vlast]), epoch(self.end_of_time), p + ":" + vlast, vlast, authColor(p), None)
+    
+    
+        try:
+            fig, ax = plt.subplots(figsize=(100,max(7, 3*len(tl.categories()))))
+            tl.draw_time_axis(ax, limit_view_category=p)
+            tl.draw_bars(ax)
+            tl.draw_connections(ax)
+            t = plt.title("Downstream dependencies: packages that depend on " + p + "\n ", fontsize=90)
+            savefig(pngname, bbox_extra_artists=[t], bbox_inches="tight")
         except Exception, e:
             import traceback
             traceback.print_exc()
@@ -345,14 +609,12 @@ class VersionHistories():
             return "/" + str(ans.group(0))
 
     def investigate(self, plots, colwidth=20):
-        for (p, pd, rd) in self.interesting():
-            print(p, self.author(p))
-            auth = self.author(p)
-            rds = [r for r in rd if self.author(r) != auth]
-            pds = [d for d in pd if self.author(d) != auth]
-            if len(rds) > 0 and len(pds) > 0:
-                with open(plots + "/" + p + ".timeline.txt", "w") as f:
-                    f.write("\n".join(list(self.showTimeline(p, colwidth=colwidth))).encode('ascii','ignore'))
-                self.graph_package_deps(p, plots + "/" + p + ".png")
+        for (p, pd, rd) in self.interesting_packages():
+            self.dumpVis(plots, p, colwidth=colwidth)
+
+    def dumpVis(self, plots, p, colwidth=20):
+        self.showTimeline(p, colwidth=colwidth, file=plots + "/" + p + ".timeline.txt")
+        self.graph_package_deps(p, plots + "/" + p + ".png")
+        self.graph_package_downstreams(p, plots + "/" + p + ".down.png")
 
 
