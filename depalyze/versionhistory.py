@@ -250,6 +250,12 @@ class VersionHistories():
             with open(file, "w") as f:
                 f.write("\n".join(op).encode('ascii','ignore'))
 
+    def packages_by_author(self, author_match):
+        """Return [(packagename, author)] list of pairs, where author_match is a substring of author"""
+        for p in self.da:
+            if author_match in self.da[p]:
+                yield (p, self.da[p])
+
     def packages(self):
         for p in self.dc:
             yield p
