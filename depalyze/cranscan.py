@@ -13,7 +13,10 @@ def scan_R_descriptions(descriptionDir):
         for f in files:
             if f == "DESCRIPTION":
                 with open( os.path.join(root,f), "r") as f:
-                    depstruct = depstruct + parseDCF(f.read())
+                    try:
+                        depstruct = depstruct + parseDCF(f.read())
+                    except Exception, e:
+                        print "Error reading ", dirs, "/DESCRIPTION", e
     (da, dc, dv) = DCFparse2DependencyLists(depstruct)
     vh = versionhistory.VersionHistories()
     vh.preload(da, dc, dv, datetime.datetime.now().replace(tzinfo=pytz.UTC))
