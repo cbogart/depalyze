@@ -17,8 +17,18 @@ import matplotlib
 from pylab import *
 
 
+class NotApplicable(Exception): 
+    pass
 class NoVersionsException(Exception):
     pass
+standardRPackages = ["base","compiler","datasets",
+     "grDevices","graphics","grid","methods","parallel",
+     "splines","stats","stats4", "tcltk","utils"]
+addOnRPackages = ["KernSmooth","MASS","Matrix","boot","class",
+     "cluster","codetools","foreign","lattice","mgcv","nlme",
+     "nnet","rpart", "spatial","survival"]
+defaultLoaded = ["base","datasets","utils","grDevices",
+     "graphics","stats","methods","R"]
 
 def hashColor(key, selected = False):
     """Return a color unique for this key, brigher if selected.
@@ -157,6 +167,13 @@ class VersionHistories():
         if len(self.rdepscache) == 0:
             self.buildReverseDependencies()
         return self.rdepscache[package]
+
+    def present_transitive_dependencies(self, package, skip=set()):
+        deps = set(self.present_dependencies(package)) - skip
+        deps1 = set()
+        for d in deps:
+            deps1 = deps1 + self.present_transitive_dependencies(d, deps + skip)
+        return deps + deps1 - skip
 
     def present_dependencies(self, package):
         return [d for d in self.dv[package][self.latest_version(package)] if d in self.dc]
@@ -482,18 +499,23 @@ class VersionHistories():
         plt.close("all")
 
     def average_update_frequency(self):
+        return self.average_update_frequency_criterion( lambda p: True)
+
+    def average_update_frequency_of_upstreams(self):
+        return self.average_update_frequency_criterion(
+            lambda p: len(list(self.reverse_dependencies(p))) > 0)
+
+
+    def average_update_frequency_criterion(self, criterion):
         countable = 0
         auf = 0.0
         for p in self.packages():
             try:
-                uf = self.update_frequency(p)
-                auf = auf + uf
-                if (uf > 1.5):
-                    pass
-                    #print("Package",p,"Has short update frequency of",uf, (1.0/uf))
-                    #pdb.set_trace()
-                countable += 1
-            except:
+                if criterion(p):
+                    uf = self.update_frequency(p)
+                    auf = auf + uf
+                    countable += 1
+            except NotApplicable:
                 pass
         print("Of", countable)
         return auf/countable
@@ -520,9 +542,15 @@ class VersionHistories():
         num_updates = len(self.versions(p))
         dates = [self.dc[p][ver] for ver in self.dc[p]]
         span = max(dates)-min(dates)
-        if (len(list(self.reverse_dependencies(p))) == 0):
-            raise Exception("Package without deps")
-        return (num_updates-1)*1.0/span.days    
+        if len(dates) < 2:
+            print(p,"has only one revision")
+            import pdb
+            if p == "relimp": pdb.set_trace()
+            raise NotApplicable(p)
+        elif span.days == 0:
+            return 0
+        else:
+            return (num_updates-1)*1.0/span.days    
 
     def dependency_update_frequency(self, p):
         num_updates = len(self.dep_version_changes(p))
@@ -620,7 +648,68 @@ class VersionHistories():
 
     def dumpVis(self, plots, p, colwidth=20):
         self.showTimeline(p, colwidth=colwidth, file=plots + "/" + p + ".timeline.txt")
-        self.graph_package_deps(p, plots + "/" + p + ".png")
-        self.graph_package_downstreams(p, plots + "/" + p + ".down.png")
+        self.graph_package_deps(p, plots + "/" + p + ".svg")
+        self.graph_package_downstreams(p, plots + "/" + p + ".down.svg")
 
+    def versionAsOf(self, p, asOfDate):
+        "What version of package p was newest as of some date?"
+        maxver = None
+        maxverdate = datetime.datetime(1971,1,1,0,0,tzinfo=pytz.UTC)
+        for (ver, verdate) in self.dc[p].iteritems():
+            if verdate > maxverdate and verdate < asOfDate:
+                maxver = ver
+                maxverdate = verdate
+        return maxver
 
+    def depCountAsOf(self, p, asOfDate):
+        "How many dependencies did package p have as of some date?"
+        v = self.versionAsOf(p, asOfDate)
+        return len(set(self.dv[p][v].keys()) - set(defaultLoaded))
+
+    def depCountsAll2versions(self, asOfDate):
+        for p in self.dv:
+          if self.numDistinctVersionDates(p) > 1:
+            try:
+                yield self.depCountAsOf(p,asOfDate)
+            except KeyError:
+                pass
+
+    def depCountsAll(self, asOfDate):
+        for p in self.dv:
+            try:
+                yield self.depCountAsOf(p,asOfDate)
+            except KeyError:
+                pass
+
+    def numDistinctVersionDates(self, p):
+        return len(set(self.dc[p].values()))
+
+    def graphDepCountDistribution(self, asOfDate, pngfile, yaxisVisible=True, distinctVersionsOnly = True):
+
+        import numpy as np
+        import matplotlib.mlab as mlab
+        import matplotlib.pyplot as plt
+
+        import pdb; pdb.set_trace()
+        if distinctVersionsOnly:
+            x = list(self.depCountsAll2versions(asOfDate))
+        else:
+            x = list(self.depCountsAll(asOfDate))
+        print(len(x), "packages considered", sum(x)*1.0/len(x), "average #deps", len([x1 for x1 in x if x1>20]), "more than 20")
+        # the histogram of the data
+        plt.rc('xtick', labelsize=20)
+        plt.rc('ytick', labelsize=20)
+        n, bins, patches = plt.hist(x, max(x)+1, normed=1, facecolor='green', alpha=0.75)
+        
+        # add a 'best fit' line
+        
+        #plt.xlabel('Dependency count')
+        #plt.ylabel('Probability')
+        #plt.title(r'Histogram of Dependencies')
+        plt.axis([0, 20, 0, 0.4])
+        #if (not yaxisVisible):
+        #    plt.axes().get_yaxis().set_visible(False)
+        plt.grid(False)
+        
+        plt.savefig(pngfile, bbox_inches="tight")
+        #plt.show()
