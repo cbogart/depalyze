@@ -33,5 +33,5 @@ setup(
 
     keywords='sample setuptools development',
     packages=['depalyze'],
-    #install_requires=['PyGithub'],
+    install_requires=['matplotlib', 'numpy']
 )
