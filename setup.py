@@ -33,5 +33,5 @@ setup(
 
     keywords='sample setuptools development',
     packages=['depalyze'],
-    install_requires=['matplotlib', 'numpy']
+    install_requires=['matplotlib', 'numpy', 'pytz', 'python-dateutil']
 )
