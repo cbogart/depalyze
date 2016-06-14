@@ -8,7 +8,7 @@ from dateutil.relativedelta import relativedelta
 import re
 from collections import defaultdict
 import datetime
-from timeline.timeline import Timeline
+from timeline import Timeline
 import dateutil
 from pointspans import PointSpans
 from matplotlib import dates
