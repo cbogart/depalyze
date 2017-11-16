@@ -1,4 +1,3 @@
-import cranhist
 import json
 import depalyze
 import dateutil.parser
@@ -29,9 +28,19 @@ def demoEclipse():
 # which downloads the whole of NPM, boom.
 
 def demoNpm():
-    vh = depalyze.scan_npm_json("data/npmjs.json")
-    vh.validate()
-    for p in vh.interesting_packages():
+    print "Scanning"
+    with open("/Users/cbogart/sandbox/npmjson.json", "r") as f:
+       vh = depalyze.VersionHistories()
+       vh.deserialize(json.loads(f.read(), object_hook=json_util.object_hook))
+    #vh = depalyze.scan_npm_json("/users/cbogart/data/npmjs.json")
+    #print "Validating"
+    #vh.validate()
+    print "Plotting"
+    for p in vh.interesting_packages()[0:1]:
         vh.dumpVis("plots", p[0])
+    print "Averaging"
     print 1.0/vh.average_update_frequency(), "Average days between updates"
+    print "Done"
     
+demoNpm()
+
